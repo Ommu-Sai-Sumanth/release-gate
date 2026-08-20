@@ -4,16 +4,20 @@ function evaluateReleaseGate(input) {
     event,
     ref,
     workflow = {},
-    image = {},
-    environmentApproval
+    image = {}
   } = input;
 
   const violations = [];
 
+  // 1. Permissions must be EXACTLY:
+  // contents: read
+  // packages: write
+  // id-token: none
   const permissions = workflow.permissions || {};
+  const permissionKeys = Object.keys(permissions);
 
   if (
-    Object.keys(permissions).length !== 3 ||
+    permissionKeys.length !== 3 ||
     permissions.contents !== "read" ||
     permissions.packages !== "write" ||
     permissions["id-token"] !== "none"
@@ -21,6 +25,7 @@ function evaluateReleaseGate(input) {
     violations.push("EXCESS_PERMISSION");
   }
 
+  // 2. Pull requests must use pull_request
   if (
     event === "pull_request" &&
     workflow.trigger !== "pull_request"
@@ -28,6 +33,8 @@ function evaluateReleaseGate(input) {
     violations.push("UNSAFE_PR_TRIGGER");
   }
 
+  // 3. Tests must pass, matrix must be complete,
+  // and failFast must be false
   if (
     workflow.testsPassed !== true ||
     workflow.matrixComplete !== true ||
@@ -36,6 +43,9 @@ function evaluateReleaseGate(input) {
     violations.push("TESTS_INCOMPLETE");
   }
 
+  // 4. actions/* may use version tags.
+  // All third-party actions require a full 40-character
+  // lowercase hexadecimal commit SHA.
   for (const action of workflow.actions || []) {
     if (
       action.owner !== "actions" &&
@@ -46,14 +56,17 @@ function evaluateReleaseGate(input) {
     }
   }
 
+  // 5. Image must be multi-stage
   if (image.multiStage !== true) {
     violations.push("SINGLE_STAGE_IMAGE");
   }
 
+  // 6. Image must run as non-root
   if (image.runsAsRoot !== false) {
     violations.push("ROOT_RUNTIME");
   }
 
+  // 7. Secrets must be none or BuildKit
   if (
     image.secretMode !== "none" &&
     image.secretMode !== "buildkit"
@@ -61,15 +74,19 @@ function evaluateReleaseGate(input) {
     violations.push("SECRET_IN_LAYER");
   }
 
+  // 8. Zero critical vulnerabilities
   if (image.criticalVulnerabilities !== 0) {
     violations.push("CRITICAL_CVE");
   }
 
+  // 9. Image must be digest pinned
   if (image.digestPinned !== true) {
     violations.push("UNPINNED_IMAGE");
   }
 
+  // 10. Production requirements
   if (target === "production") {
+    // Production must be a push to main
     if (
       event !== "push" ||
       ref !== "refs/heads/main"
@@ -77,7 +94,8 @@ function evaluateReleaseGate(input) {
       violations.push("INVALID_PRODUCTION_REF");
     }
 
-    if (environmentApproval !== true) {
+    // Approval is inside workflow
+    if (workflow.environmentApproval !== true) {
       violations.push("APPROVAL_REQUIRED");
     }
   }
@@ -88,4 +106,6 @@ function evaluateReleaseGate(input) {
   };
 }
 
-module.exports = { evaluateReleaseGate };
+module.exports = {
+  evaluateReleaseGate
+};
